@@ -121,6 +121,60 @@ export class OpenRouter implements INodeType {
 				description: 'What sampling temperature to use',
 			},
 			{
+				displayName: 'Use Structured Output',
+				name: 'useStructuredOutput',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to enforce a specific JSON schema for the model response',
+			},
+			{
+				displayName: 'JSON Schema',
+				name: 'jsonSchema',
+				type: 'json',
+				default: '{\n  "type": "object",\n  "properties": {\n    "result": {\n      "type": "string",\n      "description": "The main result content"\n    }\n  },\n  "required": ["result"],\n  "additionalProperties": false\n}',
+				description: 'The JSON schema to enforce for structured output',
+				typeOptions: {
+					alwaysOpenEditWindow: true,
+					editor: 'json',
+					expression: true,
+				},
+				displayOptions: {
+					show: {
+						useStructuredOutput: [true],
+					},
+				},
+			},
+			{
+				displayName: 'Schema Name',
+				name: 'schemaName',
+				type: 'string',
+				default: 'output',
+				description: 'A name for the schema',
+				typeOptions: {
+					expression: true,
+				},
+				displayOptions: {
+					show: {
+						useStructuredOutput: [true],
+					},
+				},
+			},
+			{
+				displayName: 'Strict Mode',
+				name: 'strictMode',
+				type: 'boolean',
+				default: true,
+				description: 'Whether to enforce strict adherence to the schema',
+				typeOptions: {
+					expression: true,
+				},
+				displayOptions: {
+					show: {
+						useStructuredOutput: [true],
+					},
+				},
+			},
+			{
 				displayName: 'Additional Fields',
 				name: 'additionalFields',
 				type: 'collection',
@@ -244,6 +298,7 @@ export class OpenRouter implements INodeType {
 				const systemPrompt = this.getNodeParameter('system_prompt', i, '') as string;
 				const message = this.getNodeParameter('message', i) as string;
 				const temperature = this.getNodeParameter('temperature', i) as number;
+				const useStructuredOutput = this.getNodeParameter('useStructuredOutput', i, false) as boolean;
 				const additionalFields = this.getNodeParameter('additionalFields', i) as IDataObject;
 
 				if (operation === 'chat') {
@@ -263,12 +318,39 @@ export class OpenRouter implements INodeType {
 						content: message,
 					});
 
-					const requestBody = {
+					const requestBody: IDataObject = {
 						model,
 						messages,
 						temperature,
 						...additionalFields,
 					};
+
+					// Add response_format for structured output if enabled
+					if (useStructuredOutput) {
+						const jsonSchema = this.getNodeParameter('jsonSchema', i) as string | object;
+						const schemaName = this.getNodeParameter('schemaName', i) as string;
+						const strictMode = this.getNodeParameter('strictMode', i) as boolean;
+
+						let parsedSchema;
+						try {
+							// Handle jsonSchema that could be a string or already an object (when from an expression)
+							parsedSchema = typeof jsonSchema === 'string' ? JSON.parse(jsonSchema) : jsonSchema;
+						} catch (error) {
+							throw new NodeOperationError(
+								this.getNode(),
+								`Invalid JSON schema: ${(error as Error).message}`,
+							);
+						}
+
+						requestBody.response_format = {
+							type: 'json_schema',
+							json_schema: {
+								name: schemaName,
+								strict: strictMode,
+								schema: parsedSchema,
+							},
+						};
+					}
 
 					const options: IRequestOptions = {
 						url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -295,12 +377,31 @@ export class OpenRouter implements INodeType {
 					const typedResponse = response as IOpenRouterResponse;
 					const messageContent = typedResponse.choices[0].message.content.trim();
 
-					returnData.push({
-						json: {
-							response: messageContent,
-						},
-						pairedItem: { item: i },
-					});
+					// Handle structured output responses
+					if (useStructuredOutput) {
+						try {
+							const parsedContent = JSON.parse(messageContent);
+							returnData.push({
+								json: {
+									response: parsedContent,
+								},
+								pairedItem: { item: i },
+							});
+						} catch (error) {
+							throw new NodeOperationError(
+								this.getNode(),
+								`Failed to parse structured output: ${(error as Error).message}`,
+							);
+						}
+					} else {
+						// Regular text response
+						returnData.push({
+							json: {
+								response: messageContent,
+							},
+							pairedItem: { item: i },
+						});
+					}
 				}
 			} catch (error) {
 				if (this.continueOnFail()) {
