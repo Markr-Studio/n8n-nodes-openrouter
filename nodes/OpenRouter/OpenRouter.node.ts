@@ -135,7 +135,6 @@ export class OpenRouter implements INodeType {
 				description: 'The JSON schema to enforce for structured output',
 				typeOptions: {
 					alwaysOpenEditWindow: true,
-					editor: 'json',
 					expression: true,
 				},
 				displayOptions: {
